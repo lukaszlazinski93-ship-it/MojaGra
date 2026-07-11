@@ -162,6 +162,6 @@ success:true
 
 app.listen(process.env.PORT || 3000,()=>{
 
-console.log("Serwer działa!");
+console.log("Serwer działa na Render!");
 
 });
