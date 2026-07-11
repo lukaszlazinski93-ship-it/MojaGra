@@ -1,5 +1,7 @@
+require("dotenv").config();
+
 const express = require("express");
-const sqlite3 = require("sqlite3").verbose();
+const { Pool } = require("pg");
 const bcrypt = require("bcrypt");
 const cors = require("cors");
 
@@ -10,19 +12,30 @@ app.use(cors());
 app.use(express.static("public"));
 
 
-const db = new sqlite3.Database("database.db");
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false
+    }
+});
 
 
 // tworzenie tabeli użytkowników
 
-db.run(`
+pool.query(`
 CREATE TABLE IF NOT EXISTS users(
-id INTEGER PRIMARY KEY AUTOINCREMENT,
+id SERIAL PRIMARY KEY,
 username TEXT UNIQUE,
 password TEXT,
 score INTEGER DEFAULT 0
 )
-`);
+`)
+.then(() => {
+    console.log("Tabela users gotowa");
+})
+.catch(err => {
+    console.log("Błąd tabeli:", err);
+});
 
 
 // rejestracja
@@ -34,25 +47,25 @@ app.post("/register", async (req,res)=>{
     const hash = await bcrypt.hash(password,10);
 
 
-    db.run(
-        "INSERT INTO users(username,password) VALUES(?,?)",
-        [username,hash],
-        function(err){
+    try {
 
-            if(err){
-                return res.json({
-                    success:false,
-                    message:"Taki użytkownik istnieje"
-                });
-            }
-
-
-            res.json({
-                success:true
-            });
-
-        }
+    await pool.query(
+        "INSERT INTO users(username,password) VALUES($1,$2)",
+        [username,hash]
     );
+
+    res.json({
+        success:true
+    });
+
+} catch(err){
+
+    res.json({
+        success:false,
+        message:"Taki użytkownik istnieje"
+    });
+
+}
 
 });
 
@@ -60,52 +73,54 @@ app.post("/register", async (req,res)=>{
 
 // logowanie
 
-app.post("/login",(req,res)=>{
+app.post("/login", async (req,res)=>{
 
+    const {username,password}=req.body;
 
-const {username,password}=req.body;
+    try {
 
+        const result = await pool.query(
+            "SELECT * FROM users WHERE username=$1",
+            [username]
+        );
 
-db.get(
-"SELECT * FROM users WHERE username=?",
-[username],
-async(err,user)=>{
+        const user = result.rows[0];
 
+        if(!user){
+            return res.json({
+                success:false,
+                message:"Nie ma takiego użytkownika"
+            });
+        }
 
-if(!user){
-return res.json({
-success:false
-});
-}
+        const ok = await bcrypt.compare(
+            password,
+            user.password
+        );
 
+        if(!ok){
+            return res.json({
+                success:false,
+                message:"Złe hasło"
+            });
+        }
 
+        res.json({
+            success:true,
+            username:user.username,
+            score:user.score
+        });
 
-const ok = await bcrypt.compare(
-password,
-user.password
-);
+    } catch(err){
 
+        console.log(err);
 
+        res.json({
+            success:false,
+            message:"Błąd serwera"
+        });
 
-if(ok){
-
-res.json({
-success:true,
-username:user.username
-});
-
-
-}else{
-
-res.json({
-success:false
-});
-
-}
-
-
-});
-
+    }
 
 });
 
@@ -114,18 +129,26 @@ success:false
 
 // pobieranie punktów
 
-app.get("/score/:username",(req,res)=>{
+app.get("/score/:username", async (req,res)=>{
 
+    try {
 
-db.get(
-"SELECT score FROM users WHERE username=?",
-[req.params.username],
-(err,row)=>{
+        const result = await pool.query(
+            "SELECT score FROM users WHERE username=$1",
+            [req.params.username]
+        );
 
-res.json(row);
+        res.json(result.rows[0]);
 
-});
+    } catch(err){
 
+        console.log(err);
+
+        res.json({
+            score:0
+        });
+
+    }
 
 });
 
@@ -134,26 +157,34 @@ res.json(row);
 
 // dodawanie punktów
 
-app.post("/score",(req,res)=>{
+app.post("/score", async (req,res)=>{
 
+    const {username}=req.body;
 
-const {username}=req.body;
+    try {
 
+        await pool.query(
+            `
+            UPDATE users
+            SET score = score + 1
+            WHERE username=$1
+            `,
+            [username]
+        );
 
-db.run(
-`
-UPDATE users
-SET score = score + 1
-WHERE username=?
-`,
-[username]
-);
+        res.json({
+            success:true
+        });
 
+    } catch(err){
 
-res.json({
-success:true
-});
+        console.log(err);
 
+        res.json({
+            success:false
+        });
+
+    }
 
 });
 
